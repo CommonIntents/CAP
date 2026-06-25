@@ -1,187 +1,134 @@
-# CAPABILITY-13 协议白皮书
+# CAPABILITY-13：能力认证与异步人机共识（HITL）规范（v1.0.0-RFC-4）
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) [![Version](https://img.shields.io/badge/Version-0.1.0--draft-orange.svg)]() [![Status](https://img.shields.io/badge/Status-RFC%20Draft-yellow.svg)]() [![Org](https://img.shields.io/badge/Org-CommonIntents--144-darkgray.svg)](https://github.com/CommonIntents)
+## 1. 引言与设计目标
+本规范定义了 **CAPABILITY-13** 标准，它是 **CommonIntents-144（CI-144）** 协议族中面向AI原生的能力认证、动态安全域映射与异步非阻塞人机共识（HITL）标准。
 
-
-## 能力认证协议
-
-**版本**: v0.1.0 草案
-**日期**: 2026-05-21
-**状态**: Jasonmilk
-**许可证**：Apache 2.0
+在多智能体共生的复杂环境中，编译期静态安全控制会导致系统僵化，而无约束的自主执行则可能引发灾难性载荷执行或密钥泄露。CAPABILITY-13 通过以下机制解决该问题：
+- 定义基于令牌的异步质询-响应协议完成人机校验，避免有限状态机线程阻塞与资源耗尽
+- 建立可动态更新、经密码学签名的权限映射注册表（`capability_mapping.toml`）
+- 标准化逻辑意图作用域与物理执行沙箱权限的直接边界映射（如 Tentacle 权限清单）
 
 ---
 
-## 一、核心定位
+## 2. 动态权限映射注册表
+CAPABILITY-13 不将安全映射硬编码在执行器（Anaphase）的编译产物中，而是将权限判定委托给动态注册表文件 `capability_mapping.toml`。
 
-CAPABILITY-13（Capability Authentication Protocol）是**能力认证与HITL决策标准**。
+### 2.1 结构定义
+```toml
+# config/capability_mapping.toml
+# 经 Ed25519 签名的动态权限映射配置
 
-它定义“谁能做什么，以什么条件，在什么时限内”。将权限从静态通行证转变为动态、有时效、可评估的信任过程。
+[meta]
+version = "1.0.0"
+updated_at = "2026-06-26T12:00:00Z"
+signer_l0_hash = "f3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca4..." # 创建者L0创世密钥哈希
 
-CAP是协议栈的**免疫系统**——动态防御，按需激活。
+[mappings.standard_scopes]
+"read" = ["filesystem:read", "memory:read"]
+"write" = ["filesystem:write", "memory:write"]
+"execute" = ["execute:wasm", "execute:js"]
+"external_network" = ["network:outbound"]
+
+[mappings.custom_scopes]
+"media_control" = ["system:audio", "execute:media_player"]
+"scientific_simulation" = ["compute:float_matrix", "filesystem:read:/opt/data"]
+
+[integrity]
+algorithm = "Ed25519"
+# 覆盖全部 mappings 区块的密码学签名，由创建者私钥签发
+signature = "8b625cf0a359873d2efba93de89fa1237de1e604f378d389fe39a1c890bfca12f9..."
+```
+
+### 2.2 启动密码学校验链路
+执行器（Anaphase）初始化阶段必须执行类 DNSSEC 的签名校验流程：
+1.  **提取映射区块**：读取配置文件中所有 `[mappings]` 区块的原始字节数组
+2.  **解析创建者公钥**：通过本地 UDS 上的标准化 L0 gRPC 接口，向系统受信的 **L0 控制器** 查询与当前 L0 基因锁谱系哈希匹配的受信创建者公钥
+3.  **解密验签**：使用提取出的映射载荷，校验 `[integrity].signature` 区块内的签名有效性
+4.  **失败安全锁定**：若签名校验失败，或 `signer_l0_hash` 与当前 L0 身份不匹配，Anaphase 必须立即抛出错误码 `0x05FA`（配置签名无效），拒绝启动，并全面锁定所有执行沙箱
 
 ---
 
-## 二、与CIS的关系
+## 3. 异步非阻塞人机质询-响应协议
+当高风险操作被拦截或关键权限被调用时，CAPABILITY-13 强制采用非阻塞异步挂起流程，复用 BIND-19 的 `CON`（`0x02`）标志位。
 
-CIS定义“AI想做什么”，CAP定义“AI能做什么，以什么条件，在什么时限内”。
+```
+                  Anaphase 拦截高风险操作
+                                   │
+                                   ▼
+                [ 步骤1：挂起任务并生成校验令牌 ]
+          - 创建待人机确认令牌，绑定关联ID
+          - 让出当前任务状态机线程，避免资源阻塞
+                                   │
+                                   ▼ (令牌流式推送至UI视口)
+                [ 步骤2：可视化与物理身份质询 ]
+          - 界面展示「需共识确认」视觉锁定状态
+          - 等待人类创建者对载荷进行物理签名
+                                   │
+                                   ▼ (返回已签名的响应令牌)
+                [ 步骤3：验签并恢复执行 ]
+          - 使用L0密钥校验密码学签名
+          - 恢复被挂起的状态机上下文，执行工具，提交两阶段提交
+```
 
-CIS与CAP通过**Manifest**连接——Manifest声明了应用支持哪些CIS意图，以及每个意图的安全约束。CIS意图是Manifest中`actions`数组的`name`字段的语义来源。
-
-CISS在传输层提供身份证明（mTLS），CAP基于此已证明身份进行动态授权。
-
----
-
-## 三、极简核心
-
-CAPABILITY-13 Core只定义三样，不可再少。
-
-### 3.1 能力声明
-
-每个兼容CAP的应用必须发布一份能力清单，声明工具的主权边界。
-
+### 3.1 待确认人机令牌（Pending_HITL_Token）载荷规范
 ```json
 {
-  "application": "cellrix-payment",
-  "actions": [
-    {
-      "name": "transfer",
-      "description": "发起一笔转账",
-      "securityClass": "critical",
-      "lease": {
-        "maxDuration": "15m",
-        "renewable": false
-      }
-    },
-    {
-      "name": "balance",
-      "description": "查询账户余额",
-      "securityClass": "safe"
-    }
-  ]
+  "correlation_id": "4bf92f35-77b3-4da6-a3ce-929d0e0e4736",
+  "challenge_hash": "目标命令与参数的SHA-256哈希值",
+  "requested_permissions": ["network:outbound", "filesystem:write"],
+  "timeout_ms": 900000,
+  "timestamp": 1782376405
 }
 ```
 
-Manifest中声明的`name`字段对应CIS意图语义。`securityClass`决定该动作是否需要HITL审批。`lease`字段存在时，时效性扩展激活；不存在时，该操作不涉及时效性约束。
+#### 字段说明
+- `correlation_id`：可选字符串，用于协议栈全链路追踪与事务关联
+- `challenge_hash`：字符串，目标命令载荷的 SHA-256 密码学哈希
+- `requested_permissions`：字符串数组，本次操作申请的具体物理权限
 
-**不声明，即不存在。不声明的能力，Agent无权调用。**
-
-### 3.2 决策请求与状态机
-
-所有需人类审批的操作，通过标准决策请求进入异步队列。
-
-```
-pending → notified → viewed → approved / rejected / modified → completed
-                                 ↘ expired (若设置了决策有效期)
-```
-
-**决策请求标准格式：**
-
-```json
-{
-  "decision_id": "唯一标识",
-  "action": "transfer",
-  "parameters": {},
-  "agent_id": "请求方身份",
-  "created_at": "时间戳",
-  "expires_at": "决策有效期（可选）",
-  "context": {
-    "request_id": "幂等性保证",
-    "state_hash": "Agent执行状态哈希",
-    "timestamp": "请求时间戳"
-  }
-}
-```
-
-服务端在执行前必须验证状态一致性，不一致则返回`state_mismatch`错误。
-
-### 3.3 能力握手
-
-对于声明了时效性约束的操作，Agent必须在执行前完成握手——用CISS的mTLS证明其长期身份，换取短生命周期操作凭据（JWT），在有效窗口内完成操作。
-
-**一次长期身份证明，换取一次有时限的操作授权。**
+### 3.2 非阻塞状态机流转
+- **线程让出**：发出待确认令牌后，状态机立即让出当前活跃线程，不会阻塞操作系统线程，也不会进入死循环等待
+- **任务调度**：调度器将当前任务切换为「等待中」状态，允许执行队列中其他待处理任务占用CPU资源
+- **验签唤醒**：已签名的响应令牌通过 BIND-19 控制帧（0x03）回推后，Anaphase 反应器完成签名校验；校验通过则将任务切回「活跃」状态，无缝恢复执行上下文
 
 ---
 
-## 四、可选扩展
+## 4. 标准能力映射配置
+所有执行沙箱（如 Tentacle WASM）必须在其静态权限清单中声明申请的权限。CAPABILITY-13 强制执行以下精细化边界映射：
 
-所有高级特性以独立扩展包形式存在。**按需激活，默认静默。**
-
-| 扩展 | 激活条件 | 功能 |
+| 逻辑作用域 | Tentacle 清单能力项 | 沙箱执行行为 |
 |:---|:---|:---|
-| Lease 扩展 | Manifest中声明`lease`字段 | 能力时效性约束与续期 |
-| Expiry 扩展 | 决策请求中携带`expires_at` | 决策本身的生存时间 |
-| Audit 扩展 | Manifest或服务端配置启用 | 完整的事件审计追踪 |
-| Passkey 扩展 | Manifest中声明`approval.method: "passkey"` | 审批结果需硬件签名 |
-| Delegation 扩展 | 未来CAPS阶段定义 | 能力的衰减与转移 |
-
-**扩展不声明则不激活。不激活则零开销。**
+| **`read`（读取）** | `"filesystem:read"` | 授予指定隔离根目录的只读访问权限 |
+| **`write`（写入）** | `"filesystem:write"` | 仅允许在临时写时复制沙箱层内执行写入 |
+| **`execute`（执行）** | `"execute:wasm"` / `"execute:js"` | 启动受内存与CPU边界限制的沙箱化 WASM/QuickJS 线程 |
+| **`external_network`（外网访问）** | `"network:outbound"` | 允许出站TCP连接；所有出站调用必须经本地 Tuck 代理转发 |
+| **`admin`（管理）** | `"admin:gene_lock"` | 允许向记忆核心L0控制器发送管理重载指令 |
 
 ---
 
-## 五、异步HITL
-
-### 5.1 模型
-
-Agent提交待审批决策后**继续执行其他任务**，逻辑流不撕裂。人类在方便时异步审查队列。决策结果返回后Agent无缝衔接。
-
-人类不是系统的瓶颈，是握有最终否决权的战略家。
-
-### 5.2 审批签名标准化
-
-审批结果的标准格式：
-
-```json
-{
-  "decision_id": "原始决策ID",
-  "status": "approved",
-  "approver": "审批者身份",
-  "timestamp": "审批时间",
-  "signature": {
-    "payload": "decision_id + status + timestamp",
-    "algorithm": "签名算法标识",
-    "value": "签名值"
-  }
-}
-```
-
-`signature`字段为可选。当Manifest声明`approval.method`时，此字段必须存在，CAP服务端在状态变更前必须验证签名有效性。
-
-**CAP只规定签名的标准格式，不规定用什么硬件、什么算法生成签名。**
+## 5. 创建者密钥轮换与吊销协议
+为防范私钥泄露风险，CAPABILITY-13 与 L0 控制器联动，支持类 GPG 的非对称密钥轮换：
+1.  **提交轮换申请**：所有者通过管理通道提交已签名的密钥轮换事务：
+    ```json
+    {
+      "previous_key_hash": "当前签名密钥的SHA-256哈希",
+      "new_public_key": "原始Ed25519公钥字符串",
+      "rotation_proof": "旧私钥对新公钥哈希生成的Ed25519签名"
+    }
+    ```
+2.  **存续性证明校验**：Anaphase 解析轮换事务，使用**旧公钥**校验轮换证明的签名有效性
+3.  **原子切换生效**：校验通过后，Anaphase 内存中活跃公钥替换为新公钥，立即重载并使用新签名校验当前 `capability_mapping.toml`，同时记录该事件
+4.  **密钥丢失恢复**：若私钥物理丢失，需完整修订 L0 `gene_lock.md` 文件；该操作会变更创世L0谱系哈希，强制系统在网络中执行全新身份注册
 
 ---
 
-## 六、协议边界
+## 6. 错误码
+当能力认证或校验发生失败时，执行层必须中止并返回以下诊断码：
 
-CAPABILITY-13 **负责**：
-- 定义能力声明的语法
-- 定义决策请求与响应格式
-- 定义HITL状态机生命周期
-- 定义可选扩展的激活机制
-- 定义审批签名的标准格式
-
-CAPABILITY-13 **不负责**：
-- 决策队列的具体实现（队列管道属于基建）
-- 签名的硬件和算法选择（属于实现层）
-- 业务权限判断逻辑（属于应用层）
-- 身份验证（由CISS的mTLS提供）
-
----
-
-## 七、与CISS的关系
-
-CISS在连接建立的第一毫秒完成密码学身份证明。CAP基于此已证明身份，进行动态授权和能力握手。
-
-CISS提供的是**长期身份密钥**（Agent的私钥证书），CAP在此之上签发**短生命周期操作凭据**（JWT）。长期身份不直接用于操作授权，操作授权必须通过有时效的凭据。
-
-**平台无关性**：CAPABILITY-13 协议规范以内容寻址标识符（CID）形式发布，不受特定平台约束。决策队列可基于任意兼容的消息队列组件搭建，例如 SQLite、Redis、Kafka；协议本身不强制限定技术栈选型。
-
----
-
-## 八、未来方向
-
-CAPS（Capability Authentication Protocol for Swarms）将在CAP基础上引入去中心化身份（DID）、可验证凭证（VC）、零知识证明、全局信誉系统，支持Agent在网络中自主协作。
-
----
-
-*本白皮书由CIS/CAP协议工作组维护。*
+| 错误码十进制 | 十六进制值 | 错误名称 | 说明 |
+|:---|:---|:---|:---|
+| `1408` | `0x0580` | `PERMISSION_DENIED` | 沙箱申请了其权限清单未声明的能力 |
+| `1500` | `0x05DC` | `CONSENSUS_UNAVAILABLE` | 外部共识/人机校验引擎离线或不可达 |
+| `1530` | `0x05FA` | `INVALID_CONFIGURATION_SIGNATURE` | 动态权限注册表文件签名校验失败 |
+| `1531` | `0x05FB` | `UNAUTHORIZED_KEY_ROTATION` | 密钥轮换事务签名与当前活跃密钥校验不通过 |
+| `1532` | `0x05FC` | `CONSENSUS_TIMEOUT` | 人机共识令牌超时，未收到有效签名响应 |

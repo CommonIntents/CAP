@@ -1,299 +1,147 @@
-# CAPABILITY-13: Consensus Authentication Protocol
+# CAPABILITY-13: Capability Authentication and Asynchronous Human-In-The-Loop (HITL) Specification (v1.0.0-RFC-4)
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) [![Version](https://img.shields.io/badge/Version-0.3.0--draft-orange.svg)]() [![Status](https://img.shields.io/badge/Status-RFC%20Draft-yellow.svg)]() [![Org](https://img.shields.io/badge/Org-CommonIntents--144-darkgray.svg)](https://github.com/CommonIntents)
+## 1. Introduction and Objectives
 
-**Version**: 0.3.0-draft
-**Status**: Working Group Internal Draft
-**Date**: 2026-05-29
-**License**: Apache 2.0
+This specification defines **CAPABILITY-13**, the standard for AI-native capability authentication, dynamic security scope mapping, and asynchronous, non-blocking Human-In-The-Loop (HITL) consensus within the **CommonIntents-144 (CI-144)** suite.
 
----
-
-## 1. Core Positioning
-
-CAPABILITY-13 (Capability Authentication Protocol) is the **capability authentication and HITL decision standard**.
-
-It defines "who can do what, under what conditions, within what timeframe." It transforms permissions from static passes into a dynamic, time-bound, evaluable trust process.
-
-CAPABILITY-13 is the **consensus anchor** of the protocol stack — what you see is what you sign.
+In complex, multi-agent co-biotic environments, static compile-time security controls lead to system rigidity, while unconstrained autonomy leads to catastrophic payload execution or secret leakage. CAPABILITY-13 solves this by:
+- Defining an asynchronous, token-based challenge-response protocol for HITL validation, preventing FSM thread lockups or resource starvation.
+- Establishing a dynamically updateable, cryptographically signed permission mapping registry (`capability_mapping.toml`).
+- Standardizing the direct boundary mapping between logical intent scopes and physical execution sandbox permissions (such as Tentacle Manifests).
 
 ---
 
-## 2. Relationship with INTENT-7
+## 2. Dynamic Permission Mapping Registry
 
-INTENT-7 defines "what AI wants to do"; CAPABILITY-13 defines "what AI can do, under what conditions, within what timeframe."
+Rather than hardcoding security mappings inside the compilation binary of the executor (Anaphase), CAPABILITY-13 delegates authority mapping to a dynamic registry file: `capability_mapping.toml`.
 
-INTENT-7 and CAPABILITY-13 are connected through the **Manifest** — the Manifest declares which INTENT-7 intents an application supports and the security constraints for each intent. INTENT-7 intents are the syntactic source of the `name` field in the `actions` array of the Manifest.
+### 2.1 Schema Structure
 
-INTENT-7-SECURE provides identity proof at the transport layer (mTLS). CAPABILITY-13 performs dynamic authorization based on this already-proven identity.
+```toml
+# config/capability_mapping.toml
+# Dynamic permission mapping signed via Ed25519
+
+[meta]
+version = "1.0.0"
+updated_at = "2026-06-26T12:00:00Z"
+signer_l0_hash = "f3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca4..." # Creator's L0 Genesis Key Hash
+
+[mappings.standard_scopes]
+"read" = ["filesystem:read", "memory:read"]
+"write" = ["filesystem:write", "memory:write"]
+"execute" = ["execute:wasm", "execute:js"]
+"external_network" = ["network:outbound"]
+
+[mappings.custom_scopes]
+"media_control" = ["system:audio", "execute:media_player"]
+"scientific_simulation" = ["compute:float_matrix", "filesystem:read:/opt/data"]
+
+[integrity]
+algorithm = "Ed25519"
+# Cryptographic signature covering all [mappings] blocks, signed by Creator's private key
+signature = "8b625cf0a359873d2efba93de89fa1237de1e604f378d389fe39a1c890bfca12f9..."
+```
+
+### 2.2 Boot-up Cryptographic Verification Chain
+
+During the initialization phase of the executor (Anaphase), the system MUST perform a DNSSEC-style signature check:
+
+1.  **Extract Mappings Block**: Read the raw byte array of all `[mappings]` blocks in the configuration file.
+2.  **Resolve Creator Key**: Query the system's trusted **L0 Controller** (via the standardized L0 gRPC interface over local UDS) for the current trusted Creator Public Key matching the L0 Gene Lock bloodline hash.
+3.  **Decrypt and Verify**: Validate the signature inside the `[integrity].signature` block against the extracted mappings payload.
+4.  **Fail-Secure Lockout**: If the signature verification fails, or the `signer_l0_hash` mismatches with current L0 identity, Anaphase MUST immediately throw error code `0x05FA` (`INVALID_CONFIGURATION_SIGNATURE`), refuse to start, and completely lock down all execution sandboxes.
 
 ---
 
-## 3. Minimal Core
+## 3. Asynchronous Non-Blocking HITL Challenge-Response Protocol
 
-CAPABILITY-13 Core defines only three things, irreducible.
+When an action is flagged as high-risk or a critical permission is invoked, CAPABILITY-13 mandates a non-blocking asynchronous suspension flow, utilizing the BIND-19 `CON` (`0x02`) flag.
 
-### 3.1 Capability Declaration (Manifest)
+```
+                  Anaphase Intercepts High-Risk Action
+                                   │
+                                   ▼
+                [ Step 1: Suspend Task & Generate Token ]
+          - Create Pending_HITL_Token (mapped to correlation_id)
+          - Yield current task FSM thread to avoid resource lockups
+                                   │
+                                   ▼ (Stream token to UI Viewport)
+                [ Step 2: Visual and Physical Challenge ]
+          - Interface displays "Consensus Required" visual lock
+          - Wait for human creator to physically sign payload
+                                   │
+                                   ▼ (Return signed Response_HITL_Token)
+                [ Step 3: Verify and Resume Execution ]
+          - Verify cryptographic signature against L0 key
+          - Resume suspended FSM context, execute tool, commit 2PC
+```
 
-Every CAPABILITY-13-compatible application MUST publish a capability manifest, declaring the sovereign boundary of the tool.
+### 3.1 `Pending_HITL_Token` Payload Specification
 
 ```json
 {
-  "agent_name": "anaphase",
-  "version": "1.0.0",
-  "actions": [
-    {
-      "id": "scrape",
-      "label": "Scrape URL",
-      "security_class": "normal",
-      "parameters": { "url": { "type": "string" } }
-    },
-    {
-      "id": "delete_file",
-      "label": "Delete File",
-      "security_class": "critical",
-      "lease_ms": 30000,
-      "parameters": { "path": { "type": "string" } }
-    }
-  ],
-  "layout_hints": {
-    "preferred_panels": ["state_tree", "text_panel"],
-    "grid": {
-      "rows": [
-        { "id": "sidebar", "constraint": { "percentage": 0.3 } },
-        { "id": "main", "constraint": { "percentage": 0.7 } },
-        { "id": "bottom", "constraint": { "fixed_lines": 3 } }
-      ]
-    }
-  }
+  "correlation_id": "4bf92f35-77b3-4da6-a3ce-929d0e0e4736",
+  "challenge_hash": "sha256_hash_of_target_command_and_parameters",
+  "requested_permissions": ["network:outbound", "filesystem:write"],
+  "timeout_ms": 900000,
+  "timestamp": 1782376405
 }
 ```
 
-**Manifest Field Description**:
+#### Fields Description
+- `correlation_id`: Optional string. Used for end-to-end tracing and transaction correlation across protocol layers.
+- `challenge_hash`: String. Cryptographic SHA-256 hash of the target command payload.
+- `requested_permissions`: Array of strings. Specific physical permissions being requested.
 
-| Field | Type | Required | Description |
-|------|------|------|------|
-| `agent_name` | string | Yes | Human-readable name of the Agent |
-| `version` | string | Yes | Semantic version number of the Agent |
-| `actions` | array of Action | Yes | List of invocable actions |
-| `layout_hints` | LayoutHints | No | Default layout suggestions |
+### 3.2 Non-Blocking State Machine Transition
 
-**Action Field Description**:
-
-| Field | Type | Required | Description |
-|------|------|------|------|
-| `id` | string | Yes | Unique action identifier (maps to INTENT-7 intent name) |
-| `label` | string | Yes | Human-readable button label |
-| `security_class` | string | Yes | `"normal"` or `"critical"` |
-| `lease_ms` | u64 | No | Time-to-live (milliseconds) of HITL approval window. Declaring this field enables the lease extension. |
-| `parameters` | object | Yes | JSON Schema defining action parameter structure |
-
-**LayoutHints Field Description**:
-
-| Field | Type | Required | Description |
-|------|------|------|------|
-| `preferred_panels` | array of string | No | List of recommended node types to display |
-| `grid` | GridDefinition | No | Explicit grid layout definition |
-
-**Layout Priority (Full Override Strategy)**:
-
-Clients **MUST** select layout sources in the following priority order:
-1. `SemanticSnapshot.layout_overrides` (Highest priority, can change dynamically per snapshot)
-2. `CapabilityManifest.layout_hints` (Default layout at connection establishment)
-3. Client built-in implicit heuristics (Fallback when above two are absent)
-
-Higher-priority sources **completely override** lower-priority ones; no partial field merging is performed. This eliminates implicit conflicts caused by JSON merging and guarantees predictable client behavior.
-
-**Not declared means it does not exist. Capabilities not declared are not authorized for any Agent.**
-
-### 3.1.1 Semantic Snapshot — Agent State Projection
-
-`SemanticSnapshot` is a complete projection of the Agent's current state, pushed to clients via BIND-19 `snapshot/update` events. It is the **only data source** for client UI rendering.
-
-#### SemanticSnapshot Structure
-| Field | Type | Required | Description |
-|------|------|------|------|
-| `epoch_time` | u64 | Yes | Snapshot timestamp (Unix seconds) |
-| `status` | string | Yes | Agent status: `"running"`, `"idle"`, `"error"` and others |
-| `metrics` | object | No | Optional metrics data |
-| `semantic_tree` | array of SemanticNode | Yes | List of UI nodes |
-| `active_focus` | string | No | Suggested current focused node ID by Agent |
-| `layout_overrides` | LayoutHints | No | Dynamic layout override (highest priority) |
-
-#### SemanticNode Structure
-| Field | Type | Required | Description |
-|------|------|------|------|
-| `id` | string | Yes | Unique node identifier |
-| `node_type` | string | Yes | Node type (see enumeration below) |
-| `label` | string | Yes | Human-readable label |
-| `content` | object | Yes | Node content data, structure determined by `node_type` |
-| `slot_binding` | string | No | Bind to a specific layout slot ID |
-| `focused` | boolean | Yes | Agent suggested focus state |
-
-#### NodeType Enumeration
-| Value | Description |
-|----|------|
-| `"state_tree"` | Hierarchical state tree |
-| `"text_panel"` | Text / Markdown panel |
-| `"action_button"` | Triggerable action button |
-| `"progress_bar"` | Progress indicator |
-| `"code_diff"` | Code difference view |
-| `"metrics"` | Numeric metrics panel |
-
-When a client encounters an unknown `node_type`, it **MUST** fall back to a debug view and render raw `content` data, and **MUST NOT** crash.
-
-### 3.2 Decision Request and State Machine
-
-All operations requiring human approval enter an asynchronous queue through a standard Action Request.
-
-**Action Request Standard Format:**
-```json
-{
-  "action_id": "delete_file",
-  "parameters": { "path": "/tmp/test.txt" },
-  "view_hash": "abc123def456...",
-  "lease_ms": 30000
-}
-```
-
-| Field | Type | Required | Description |
-|------|------|------|------|
-| `action_id` | string | Yes | Matches action `id` defined in Manifest |
-| `parameters` | object | No | Action parameters, structure defined by Manifest JSON Schema |
-| `view_hash` | string | Yes | View hash (SHA-256 hex string) of the interface seen during user confirmation |
-| `lease_ms` | u64 | No | When `lease_ms` is declared in Manifest, clients **SHOULD** carry this field to synchronize local countdown timer with Agent |
-
-**HITL Decision State Machine:**
-```
-[PENDING] → (Agent processing) → [APPROVED / DENIED / EXPIRED]
-```
-
-- **PENDING**: Waiting for human confirmation (only applies to `security_class: "critical"` actions).
-- **APPROVED**: User confirmed the action with valid `view_hash`.
-- **DENIED**: User rejected the action.
-- **EXPIRED**: Lease window timed out, action revoked.
-
-**Lease Time Contract**:
-If `lease_ms` is declared in Manifest, clients **MUST** render a visible countdown indicator on UI. Once the countdown reaches zero, the client locally discards the intent. The Agent **MUST** also mark the action as `EXPIRED`. Both sides rely on absolute lease time for state alignment, independent of network clock synchronization.
-
-### 3.2.1 View Consensus Anchor — View Hash
-
-#### Definition
-`view_hash` is a cryptographic fingerprint of the content visible to a user when signing a decision. It anchors to the **semantic layout tree**, not physical pixel coordinates. This guarantees identical hash output for the same `SemanticSnapshot` across different screen sizes and frontend implementations (TUI / WebUI).
-
-#### Algorithm: Semantic Tuple Serialization
-**Key Design Decision**: The hash input uses a **flat array with fixed index order** instead of JSON key-value map. This fundamentally eliminates inconsistent key ordering caused by different programming languages, JSON libraries and hash table implementations.
-
-#### Calculation Steps
-1. Collect all visible `SemanticNode` items.
-2. Sort nodes in lexicographical ascending order by `node.id`.
-3. Construct a deterministic array for each node:
-   ```
-   [id, node_type, label, content_hash, slot_binding, focused]
-   ```
-   - `content_hash`: Hex string of `SHA-256(canonical_json(node.content))`
-   - `slot_binding`: Set to `null` if not present
-   - `focused`: Boolean value `true` / `false`
-4. Serialize the list of arrays into a compact JSON string (no extra whitespace):
-   ```
-   [["id1","text_panel","Hello","abc123...",null,false],["id2","action_button","Go","def456...","bottom",true]]
-   ```
-5. Compute `SHA-256` over the compact string to get the final `ViewHash`.
-
-#### Cross-Platform Consistency
-Since `view_hash` excludes physical coordinates (x, y, width, height), the same `SemanticSnapshot` produces identical `view_hash` on TUI and WebUI. This is the core technical guarantee for the One-UI goal.
-
-#### Transmission
-The `ActionRequest` **MUST** carry the `view_hash` field, representing the view state when the user signed the decision. The Agent uses this value to verify that the user signed against the correct interface state.
-
-### 3.3 Capability Handshake
-
-For operations with declared time-bound constraints, the Agent MUST complete a handshake before execution — using its long-term identity key (proven by INTENT-7-SECURE mTLS) to obtain a short-lived operational credential (JWT), completing the operation within its validity window.
-
-**One long-term identity proof, in exchange for one time-bound operational authorization.**
+- **Yield Thread**: Upon issuing the `Pending_HITL_Token`, the FSM immediately yields the active thread. It does NOT block the OS thread or spawn infinite wait loops.
+- **Task Scheduling**: The scheduler context-swaps the current task to `WAITING` status and allows other pending tasks in the execution queue to consume CPU cycles.
+- **Verification & Wake**: Once the signed `Response_HITL_Token` is pushed back via BIND-19 `Control (0x03)` frame, Anaphase's reactor verifies the signature. On success, it moves the task back to `ACTIVE`, restoring the execution context seamlessly.
 
 ---
 
-## 4. Optional Extensions
+## 4. Standard Capability Mapping Profiles
 
-All advanced features exist as independent extension packages. **Activated on demand, silent by default.**
+Every execution sandbox (e.g., Tentacle WASM) MUST declare its requested permissions in its static Manifest. CAPABILITY-13 enforces the following definitive, granular boundary mapping:
 
-| Extension | Activation Condition | Function |
+| Logical Scope | Tentacle Manifest Capability | Sandbox Enforcement Behavior |
 |:---|:---|:---|
-| Lease Extension | `lease_ms` field declared in Manifest | Capability time-bound constraints and renewal |
-| Expiry Extension | `lease_ms` carried in Action Request | Lifespan of decision approval window |
-| Audit Extension | Enabled in Manifest or server config | Complete event audit trail |
-| Passkey Extension | `approval.method: "passkey"` declared in Manifest | Approval result requires hardware signature |
-| Delegation Extension | Defined in future CAPS phase | Capability decay and transfer |
-
-**Extensions not declared are not activated. Not activated means zero overhead.**
+| **`read`** | `"filesystem:read"` | Grants read-only access to specific chroot directories. |
+| **`write`** | `"filesystem:write"` | Grants write access ONLY inside the temporary CoW sandbox layer. |
+| **`execute`** | `"execute:wasm"` / `"execute:js"` | Spawns sandboxed WASM/QuickJS threads with memory and CPU boundaries. |
+| **`external_network`** | `"network:outbound"` | Allows outbound TCP connections. Outbound calls MUST route via the local Tuck proxy. |
+| **`admin`** | `"admin:gene_lock"` | Allows sending administrative reload instructions to the Mind L0 controller. |
 
 ---
 
-## 5. Asynchronous HITL
+## 5. Creator Key Rotation and Revocation Protocol
 
-### 5.1 Model
+To safeguard against private key leakages, CAPABILITY-13 integrates with the L0 controller to support GPG-style asymmetric key rotation:
 
-After submitting a decision request for approval, the Agent **continues executing other tasks** — its logic flow is not torn. The human asynchronously reviews the queue at their convenience. When the decision result returns, the Agent seamlessly resumes.
-
-The human is not a system bottleneck. The human is the strategist holding ultimate veto power.
-
-### 5.2 Approval Signature Standardization
-
-Standard format for approval results:
-
-```json
-{
-  "decision_id": "original-decision-id",
-  "status": "approved",
-  "approver": "approver-identity",
-  "timestamp": "approval-time",
-  "signature": {
-    "payload": "decision_id + status + timestamp",
-    "algorithm": "signature-algorithm-identifier",
-    "value": "signature-value"
-  }
-}
-```
-
-The `signature` field is optional. When the Manifest declares `approval.method`, this field MUST be present, and the CAPABILITY-13 server MUST verify the signature's validity before any state change.
-
-**CAPABILITY-13 defines only the standard format of the signature, not which hardware or algorithm generates the signature.**
+1.  **Rotation Submission**: The owner submits a signed `KeyRotationTransaction` to the administrative channel:
+    ```json
+    {
+      "previous_key_hash": "sha256_of_current_signing_key",
+      "new_public_key": "raw_ed25519_public_key_string",
+      "rotation_proof": "ed25519_signature_by_previous_private_key(new_public_key_hash)"
+    }
+    ```
+2.  **Proof of Life Verification**: Anaphase compiles this rotation transaction and uses the **old public key** to verify the `rotation_proof`.
+3.  **Atomic Rollover**: Upon success, `Anaphase` replaces the active public key with `new_public_key` in its memory, immediately reloads and verifies the current `capability_mapping.toml` under the new signature, and logs this event.
+4.  **Key Loss Recovery**: If the private key is physically lost, a full revision of the L0 `gene_lock.md` file is required. This alters the Genesis L0 bloodline hash, forcing the system to perform a new identity registration on the network.
 
 ---
 
-## 6. Protocol Boundaries
+## 6. Error Codes
 
-CAPABILITY-13 **is responsible for**:
-- Defining the syntax of capability declarations
-- Defining the format of decision requests and responses
-- Defining the HITL state machine lifecycle
-- Defining the activation mechanism for optional extensions
-- Defining the standard format for approval signatures
-- Defining SemanticSnapshot, SemanticNode and view hash specification
+When a capability authentication or verification failure occurs, the execution layer MUST halt and return the following diagnostic codes:
 
-CAPABILITY-13 **is not responsible for**:
-- The specific implementation of the decision queue (queue infrastructure belongs to existing middleware)
-- The choice of hardware and algorithm for signatures (belongs to the implementation layer)
-- Business permission judgment logic (belongs to the application layer)
-- Identity verification (provided by INTENT-7-SECURE mTLS)
+| Error Code | Hexadecimal | Name | Description |
+|:---|:---|:---|:---|
+| `1408` | `0x0580` | `PERMISSION_DENIED` | Sandbox requested a capability not declared in its Manifest. |
+| `1500` | `0x05DC` | `CONSENSUS_UNAVAILABLE` | External CAP/HITL consensus engine is offline or unreachable. |
+| `1530` | `0x05FA` | `INVALID_CONFIGURATION_SIGNATURE` | Dynamic permission registry mapping file failed signature verification. |
+| `1531` | `0x05FB` | `UNAUTHORIZED_KEY_ROTATION` | Key rotation transaction signature failed verification against active key. |
+| `1532` | `0x05FC` | `CONSENSUS_TIMEOUT` | HITL token expired without receiving a valid signed response. |
 
----
-
-## 7. Relationship with INTENT-7-SECURE
-
-INTENT-7-SECURE completes cryptographic identity proof within the first millisecond of connection establishment. CAPABILITY-13 performs dynamic authorization and capability handshakes based on this already-proven identity.
-
-INTENT-7-SECURE provides a **long-term identity key** (the Agent's private key certificate). CAPABILITY-13 issues a **short-lived operational credential** (JWT) on top of it. Long-term identity is not directly used for operational authorization; operational authorization MUST pass through a time-bound credential.
-
-**Platform Independence**: The CAPABILITY-13 protocol specification itself is published via content addressing (CID), independent of any specific platform. The decision queue can be implemented using any compatible message queue infrastructure (e.g., SQLite, Redis, Kafka); the protocol does not mandate any specific technology stack.
-
----
-
-## 8. Future Direction
-
-CAPS (Capability Authentication Protocol for Swarms) will, on the foundation of CAPABILITY-13, introduce Decentralized Identifiers (DID), Verifiable Credentials (VC), Zero-Knowledge Proofs, and a global reputation system, supporting autonomous collaboration among Agents in a network.
-
----
-
-*This white paper is maintained by the INTENT-7/CAPABILITY-13 Protocol Working Group.*
