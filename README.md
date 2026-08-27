@@ -27,15 +27,15 @@ INTENT-7-SECURE (optional mTLS transport)
 ```
 
 ## Read the Spec
-- [CAPABILITY-13 v0.2.0-draft](spec/CAPABILITY-13.md)
+- [CAPABILITY-13 v1.0.0-RFC-4](spec/CAPABILITY-13.md)
 - [中文版](spec/CAPABILITY-13.zh-CN.md)
 
 ## Related
 | Protocol | Repository |
 |:---|:---|
-| INTENT-7 | [CommonIntents-144/INTENT-7](https://github.com/CommonIntents/INTENT-7) |
-| BIND-19 | [CommonIntents-144/BIND-19](https://github.com/CommonIntents/BIND-19) |
-| INTENT-7-SECURE | [CommonIntents-144/INTENT-7-SECURE](https://github.com/CommonIntents/INTENT-7-SECURE) |
+| INTENT-7 | [CommonIntents/INTENT-7](https://github.com/CommonIntents/INTENT-7) |
+| BIND-19 | [CommonIntents/BIND-19](https://github.com/CommonIntents/BIND-19) |
+| INTENT-7-SECURE | [CommonIntents/INTENT-7-SECURE](https://github.com/CommonIntents/INTENT-7-SECURE) |
 
 ## License
 Apache 2.0 — see [LICENSE](LICENSE).
