@@ -1,4 +1,5 @@
 # CAPABILITY-13：能力认证与异步人机共识（HITL）规范（v1.0.0-RFC-4）
+> © 2026 CommonIntents. 依据 CC BY-ND 4.0 许可（https://creativecommons.org/licenses/by-nd/4.0/）。
 
 ## 1. 引言与设计目标
 本规范定义了 **CAPABILITY-13** 标准，它是 **CommonIntents-144（CI-144）** 协议族中面向AI原生的能力认证、动态安全域映射与异步非阻塞人机共识（HITL）标准。

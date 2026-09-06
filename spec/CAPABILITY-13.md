@@ -1,4 +1,5 @@
 # CAPABILITY-13: Capability Authentication and Asynchronous Human-In-The-Loop (HITL) Specification (v1.0.0-RFC-4)
+> © 2026 CommonIntents. Licensed under CC BY-ND 4.0 (https://creativecommons.org/licenses/by-nd/4.0/).
 
 ## 1. Introduction and Objectives
 

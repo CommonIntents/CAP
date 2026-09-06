@@ -18,3 +18,13 @@ CAPABILITY-13 (Capability Authentication Protocol) is the immune system of the p
 
 - All custom extensions MUST be declared in the Manifest to be activated
 - Extensions not declared do not exist and incur zero overhead
+
+## Contributor Intellectual Property Terms
+
+By submitting a contribution (code, specification text, documentation, or test vectors), you agree that:
+
+1. **You have the right** to grant the licenses below (you are the author, or you hold the rights holder's permission).
+2. **Code contributions** are licensed to the project under the [Apache License 2.0](LICENSE) — including the patent license in §5 of that license.
+3. **Specification and documentation contributions** are licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/), as stated in each specification's header.
+4. No separate copyright assignment is required; the grants above are perpetual, worldwide, and irrevocable for the project's use.
+
